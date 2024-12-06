@@ -2,7 +2,12 @@
 #t = thickness to chord ratio
 #c = chord location of max thickness
 #h = avg height of points 2 and 3
+using Plots
 global gamma = 1.4
+global Tinf = 223.150
+global Pinf = 26436.3
+global rhoinf = 0.412707
+global ainf = 299.463
 
 include("tools.jl")
 include("bookequations.jl")
@@ -21,7 +26,7 @@ end
 
 function findsep(M,t,c,h)
     θmax = eq_6_24(M)
-    δmax = eq_6_18(M,θ)
+    δmax = eq_6_18(M,θmax)
     δ1, δ2, δ3, δ4, A1,A2,A3,A4 = airfoilgeometry(t,c,h)
     AoAmin = δ1 - δmax
     AoAmax = δmax - δ2
@@ -33,7 +38,7 @@ function weaksolution_6_18(δ,M) #TODO: use bracketing instead between
     return zeronewton(solvefunction,0.1) #TODO: 60 degrees shoud be a good guess
 end
 
-function pressures(Minf,Pinf,AoA,δ1, δ2, δ3, δ4)
+function pressures(Minf,P_inf,AoA,δ1, δ2, δ3, δ4)
     topturnangle = δ1 - AoA #TODO: Handle what happens when one of these is negative
     bottomturnangle = δ1 + AoA
     #=
@@ -42,6 +47,10 @@ function pressures(Minf,Pinf,AoA,δ1, δ2, δ3, δ4)
     println("Bottom Turn Angle:")
     println(180*bottomturnangle/pi)
     # =#
+    P1 = 0.0
+    P2 = 0.0
+    M1 = 0.0
+    M2 = 0.0
     topexpandangle = δ1 + δ3
     bottomexpandangle = δ2 + δ4
     #=
@@ -49,18 +58,53 @@ function pressures(Minf,Pinf,AoA,δ1, δ2, δ3, δ4)
     println(topexpandangle*180/pi)
     println(bottomexpandangle*180/pi)
     # =#
-    topshockangle = weaksolution_6_18(topturnangle,Minf)
-    bottomshockangle = weaksolution_6_18(bottomturnangle,Minf)
-    #=
-    println("Top Shock Angle:")
-    println(180*topshockangle/pi)
-    println("Bottom Shock Angle:")
-    println(180*bottomshockangle/pi)
-    # =#
-    P1 = eq_6_10(Minf,topshockangle)*Pinf#oblique pressure ratio
-    P2 = eq_6_10(Minf,bottomshockangle)*Pinf
-    M1 = eq_6_17(Minf,topshockangle) #obliquedownstreammach
-    M2 = eq_6_17(Minf,bottomshockangle)
+    if (topturnangle >= 0.0) && (bottomturnangle >= 0.0)
+        topshockangle = weaksolution_6_18(topturnangle,Minf)
+        bottomshockangle = weaksolution_6_18(bottomturnangle,Minf)
+        #=
+        println("Top Shock Angle:")
+        println(180*topshockangle/pi)
+        println("Bottom Shock Angle:")
+        println(180*bottomshockangle/pi)
+        # =#
+        P1 = eq_6_10(Minf,topshockangle)*P_inf#oblique pressure ratio
+        P2 = eq_6_10(Minf,bottomshockangle)*P_inf
+        M1 = eq_6_17(Minf,topshockangle) #obliquedownstreammach
+        M2 = eq_6_17(Minf,bottomshockangle)
+    elseif (topturnangle <= 0.0)
+        bottomshockangle = weaksolution_6_18(bottomturnangle,Minf)
+        #=
+        println("Bottom Shock Angle:")
+        println(180*bottomshockangle/pi)
+        # =#
+        P2 = eq_6_10(Minf,bottomshockangle)*P_inf
+        M2 = eq_6_17(Minf,bottomshockangle)
+        PMinf = eq_7_10(Minf)#pm_angle
+        PM1 = PMinf - topturnangle
+        eq_7_10_0(Mach) = eq_7_10(Mach) - PM1
+        M1 = zeronewton(eq_7_10_0,2)#machfrompm(PM1)
+        Pinf_div_Po = eq_3_15(Minf)
+        P1_div_Po = eq_3_15(M1)
+        Po = 1/(Pinf_div_Po / P_inf)
+        P1 = P1_div_Po * Po
+    else
+        topshockangle = weaksolution_6_18(topturnangle,Minf)
+        #=
+        println("Top Shock Angle:")
+        println(180*topshockangle/pi)
+        # =#
+        P1 = eq_6_10(Minf,topshockangle)*P_inf
+        M1 = eq_6_17(Minf,topshockangle)
+        PMinf = eq_7_10(Minf)#pm_angle
+        PM2 = PMinf - bottomturnangle
+        eq_7_10_00(Mach) = eq_7_10(Mach) - PM2
+        M2 = zeronewton(eq_7_10_00,2)#machfrompm(PM1)
+        Pinf_div_Po = eq_3_15(Minf)
+        P2_div_Po = eq_3_15(M2)
+        Po = 1/(Pinf_div_Po / P_inf)
+        P2 = P2_div_Po * Po
+    end
+
     PM1 = eq_7_10(M1)#pm_angle
     PM2 = eq_7_10(M2)
     PM3 = PM1 + topexpandangle
@@ -104,12 +148,32 @@ function airfoilliftdrag(M,P,AoA,t,c,h)#TODO
     return L,D
 end
 
-function analyzeairfoil(M,t,c,h)
-    AoAmax, AoAmin = findsep(t,c,h)
-    step = (AoAmax-AoAmin)/100
-    AoAs = collect(AoAmin::AoAmax)
+function analyzeairfoil(M,P,t,c,h)
+    tolerance = 0.0
+    range = 1.0-tolerance
+    AoAmax, AoAmin = findsep(M,t,c,h)
+    step = (AoAmax-AoAmin)*range/100
+    AoAs = collect((range*AoAmin):step:(range*AoAmax))
     Ls = zeros(length(AoAs))
     Ds = zeros(length(AoAs))
-    @. Ls, Ds = airfoilliftdrag(AoAs,t,c,h)
+    for i = 2:1:(length(AoAs)-1) #First and last points dont compute due to separation.
+        L, D = airfoilliftdrag(M,P,AoAs[i],t,c,h)
+        Ls[i] = L
+        Ds[i] = D
+    end
     return AoAs, Ls, Ds
+end
+
+function plotsvaryM(Mlims,t,c,h; numseries = 5)
+    Ms = collect(Mlims[1]:((Mlims[2]-Mlims[1])/(numseries - 1)):Mlims[2])
+    plot()#TODO: set plot args here
+    for i = 1:1:numseries
+        AoAs, Ls, Ds
+        plot!()
+    end
+end
+
+function separationvsM(M,t,c,h)#default values
+
+function plotscenario()#default conditions
 end
