@@ -38,7 +38,7 @@ end
 
 function eq_7_10(M)
     term1 = sqrt((gamma+1)/(gamma-1))
-    term2 = sqrt(((gamma-1)/(gamma+1))*(M^2 - 1))
-    term3 = sqrt(M^2 - 1)
+    term2 = sqrt(((gamma-1)/(gamma+1))*abs(M^2 - 1))#TODO: Check validity of abs()
+    term3 = sqrt(abs(M^2 - 1))
     return term1*atan(term2) - atan(term3) #pm_angle
 end
